@@ -1,0 +1,27 @@
+enc = tiktoken.get_encoding("gpt2")
+
+
+def process(example):
+    ids = enc.encode_ordinary(example['text'])
+    return {'ids': ids, 'len': len(ids)}
+
+
+def prepare_data():
+    """Download TinyStories, tokenize with GPT-2, and write binary files."""
+    from datasets import load_dataset
+    ds = load_dataset("roneneldan/TinyStories")
+    if os.path.exists("train.bin"):
+        print("train.bin already exists — skipping data preparation.")
+        return
+    tokenized = ds.map(process, remove_columns=['text'], desc="tokenizing", num_proc=8)
+    for split, dset in tokenized.items():
+        arr_len = np.sum(dset['len'], dtype=np.uint64)
+        filename = f'{split}.bin'
+        arr = np.memmap(filename, dtype=np.uint16, mode='w+', shape=(arr_len,))
+        idx = 0
+        for batch_idx in tqdm(range(1024), desc=f'writing {filename}'):
+            batch = dset.shard(num_shards=1024, index=batch_idx, contiguous=True).with_format('numpy')
+            arr_batch = np.concatenate(batch['ids'])
+            arr[idx : idx + len(arr_batch)] = arr_batch
+            idx += len(arr_batch)
+        arr.flush()
